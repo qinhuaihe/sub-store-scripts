@@ -5,11 +5,10 @@
 // 2. 如果存在「落地节点」subscription，则把落地节点注入配置。
 // 3. 原「🚀 节点选择」改名为「🚀 手动选择」，继续作为机场入口路线选择组。
 // 4. 所有落地节点设置 dialer-proxy: 🚀 手动选择。
-// 5. 新建一个顶层 select 组，组名优先使用当前 Sub-Store 文件的“显示名称”。
-//    该组仅包含：落地节点 + 🚀 手动选择。
-// 6. 落地节点不会进入自动选择、地区、全部节点等其他策略组。
-// 7. 如果「落地节点」不存在 / 无节点 / 读取失败，则不改策略组结构，仅注入机场合集。
-// 8. 临时输出 substore-debug，用来定位 Mihomo 文件显示名称在运行时上下文中的真实字段。
+// 5. 新建顶层 select 组：优先使用 rootGroupName 参数，其次尝试当前文件显示名称，最后使用默认名称。
+// 6. 顶层组仅包含：落地节点 + 🚀 手动选择。
+// 7. 落地节点不会进入自动选择、地区、全部节点等其他策略组。
+// 8. 如果「落地节点」不存在 / 无节点 / 读取失败，则不改策略组结构，仅注入机场合集。
 
 const yaml = ProxyUtils.yaml.safeLoad($content ?? $files[0]) || {};
 
@@ -33,6 +32,40 @@ function escapeRegex(text = '') {
   return String(text).replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 }
 
+function cleanName(value) {
+  if (value === null || value === undefined) return '';
+  const text = String(value).trim();
+  return text;
+}
+
+// 远程脚本参数由 Sub-Store 暴露为 $arguments。
+// 兼容未来/其他运行环境可能提供的参数对象。
+function getRootGroupNameFromArguments() {
+  const candidates = [];
+
+  try {
+    if (typeof $arguments !== 'undefined' && $arguments) candidates.push($arguments);
+  } catch (_) {}
+
+  try {
+    if (typeof arguments !== 'undefined' && arguments && typeof arguments === 'object') {
+      candidates.push(arguments);
+    }
+  } catch (_) {}
+
+  for (const args of candidates) {
+    try {
+      const value = args.rootGroupName ?? args.root_group_name ?? args.groupName;
+      const name = cleanName(value);
+      if (name) return name;
+    } catch (_) {}
+  }
+
+  return '';
+}
+
+// 当前 File Operator 在部分 Sub-Store 版本中 context.source 可能为 null。
+// 保留这套探测逻辑，便于未来版本若暴露文件元数据后自动生效。
 function getCurrentFileDisplayName() {
   const contexts = [];
 
@@ -46,24 +79,25 @@ function getCurrentFileDisplayName() {
 
   for (const ctx of contexts) {
     try {
-      if (ctx.displayName || ctx.name) {
-        return String(ctx.displayName || ctx.name).trim();
-      }
+      const directName = cleanName(ctx.displayName || ctx.name);
+      if (directName) return directName;
 
       const source = ctx.source;
       if (source && typeof source === 'object') {
-        for (const [key, value] of Object.entries(source)) {
-          if (!key.startsWith('_') && value && typeof value === 'object') {
-            const name = value.displayName || value.name;
-            if (name) return String(name).trim();
+        // Response Transformer/未来 File Operator 可能使用 $file。
+        for (const key of ['$file', '_file', '_mihomoConfig', '_source']) {
+          const value = source[key];
+          if (value && typeof value === 'object') {
+            const name = cleanName(value.displayName || value.name);
+            if (name) return name;
           }
         }
 
-        for (const key of ['_file', '_mihomoConfig', '_source']) {
-          const value = source[key];
-          if (value && typeof value === 'object') {
-            const name = value.displayName || value.name;
-            if (name) return String(name).trim();
+        // 兼容订阅/合集一类 context.source 结构。
+        for (const [key, value] of Object.entries(source)) {
+          if (!key.startsWith('_') && value && typeof value === 'object') {
+            const name = cleanName(value.displayName || value.name);
+            if (name) return name;
           }
         }
       }
@@ -81,14 +115,20 @@ function getCurrentFileDisplayName() {
 
       for (const item of candidates) {
         if (item && typeof item === 'object') {
-          const name = item.displayName || item.name;
-          if (name) return String(name).trim();
+          const name = cleanName(item.displayName || item.name);
+          if (name) return name;
         }
       }
     }
   } catch (_) {}
 
   return '';
+}
+
+function resolveRootGroupName() {
+  return getRootGroupNameFromArguments()
+    || getCurrentFileDisplayName()
+    || FALLBACK_ROOT_GROUP;
 }
 
 // -------------------------
@@ -119,7 +159,7 @@ try {
 
   landings = validProxies(landingProxies);
   landingEnabled = landings.length > 0;
-} catch (e) {
+} catch (_) {
   landings = [];
   landingEnabled = false;
 }
@@ -174,6 +214,7 @@ if (landingEnabled) {
     ? `(?:${landingNames.map(name => `^${escapeRegex(name)}$`).join('|')})`
     : '';
 
+  // 落地节点只允许出现在顶层组，不能混入其他策略组。
   for (const group of yaml['proxy-groups']) {
     if (!group || group === manualGroup) continue;
 
@@ -194,8 +235,9 @@ if (landingEnabled) {
     manualGroup.proxies = manualGroup.proxies.filter(name => !landingNameSet.has(name));
   }
 
-  let rootGroupName = getCurrentFileDisplayName() || FALLBACK_ROOT_GROUP;
+  let rootGroupName = resolveRootGroupName();
 
+  // 顶层组不能和手动入口组同名，否则会产生自引用/覆盖。
   if (rootGroupName === MANUAL_GROUP) {
     rootGroupName = FALLBACK_ROOT_GROUP;
   }
@@ -223,6 +265,7 @@ if (landingEnabled) {
   delete rootGroup['exclude-filter'];
   delete rootGroup['exclude-type'];
 
+  // 原来引用「🚀 节点选择」的其他策略组改为引用新的顶层组。
   for (const group of yaml['proxy-groups']) {
     if (!group || group === rootGroup || group === manualGroup) continue;
 
@@ -235,6 +278,7 @@ if (landingEnabled) {
     }
   }
 
+  // 原规则最终出口改为新的顶层组。
   if (Array.isArray(yaml.rules)) {
     yaml.rules = yaml.rules.map(rule => {
       if (typeof rule !== 'string') return rule;
@@ -244,70 +288,5 @@ if (landingEnabled) {
 } else {
   yaml.proxies = Array.from(merged.values());
 }
-
-// =====================================================
-// 临时调试：把文件操作运行时上下文直接输出到最终 YAML
-// 找到显示名称字段后会删除这一段。
-// =====================================================
-function makeDebugSafe(value, depth = 0, seen = new WeakSet()) {
-  if (depth > 6) return '[max-depth]';
-
-  if (value === null || value === undefined) return value ?? null;
-
-  const type = typeof value;
-  if (type === 'string' || type === 'number' || type === 'boolean') return value;
-  if (type === 'function') return '[function]';
-  if (type !== 'object') return String(value);
-
-  if (seen.has(value)) return '[circular]';
-  seen.add(value);
-
-  if (Array.isArray(value)) {
-    return value.slice(0, 30).map(item => makeDebugSafe(item, depth + 1, seen));
-  }
-
-  const result = {};
-  for (const [key, item] of Object.entries(value).slice(0, 100)) {
-    try {
-      result[key] = makeDebugSafe(item, depth + 1, seen);
-    } catch (_) {
-      result[key] = '[unreadable]';
-    }
-  }
-  return result;
-}
-
-const debug = {
-  detectedDisplayName: getCurrentFileDisplayName() || null,
-  context: null,
-  $context: null,
-  $options: null
-};
-
-try {
-  debug.context = typeof context !== 'undefined'
-    ? makeDebugSafe(context)
-    : '[undefined]';
-} catch (e) {
-  debug.context = `[error: ${String(e)}]`;
-}
-
-try {
-  debug.$context = typeof $context !== 'undefined'
-    ? makeDebugSafe($context)
-    : '[undefined]';
-} catch (e) {
-  debug.$context = `[error: ${String(e)}]`;
-}
-
-try {
-  debug.$options = typeof $options !== 'undefined'
-    ? makeDebugSafe($options)
-    : '[undefined]';
-} catch (e) {
-  debug.$options = `[error: ${String(e)}]`;
-}
-
-yaml['substore-debug'] = debug;
 
 $content = ProxyUtils.yaml.safeDump(yaml);
