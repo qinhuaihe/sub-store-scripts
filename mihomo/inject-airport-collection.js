@@ -2,7 +2,7 @@
 //
 // 作用：
 // 1. 把「机场合集」collection 的全部节点注入当前 Mihomo 配置。
-// 2. 如果存在「落地节点」subscription，则把落地节点注入配置。
+// 2. 支持从「落地节点」subscription 或同名独立 subscription 解析落地节点。
 // 3. 原「🚀 节点选择」改名为「🚀 手动选择」，作为机场入口路线选择组。
 // 4. 所有落地节点设置 dialer-proxy: 🚀 手动选择。
 // 5. 顶层 select 组仅包含：落地节点 + 🚀 手动选择。
@@ -11,11 +11,14 @@
 //
 // landing 参数：
 //   不传 landing            使用「落地节点」订阅中的全部节点
-//   ?landing=节点名称       仅使用指定落地节点
-//   ?landing=节点A,节点B    仅使用指定的多个落地节点
+//   ?landing=节点名称       先在「落地节点」中按节点名精确匹配；若未命中，再读取同名 subscription
+//   ?landing=节点A,节点B    对每个名称分别按上述规则解析并合并
 //   ?landing=none           禁用全部落地节点，机场直接出站
 //
-// 注意：landing 按节点名称精确匹配，建议节点名保持唯一。
+// 例：
+//   ?landing=Oracle-SG-1
+//   如果「落地节点」里存在名为 Oracle-SG-1 的节点，则使用该节点；
+//   否则尝试读取名为 Oracle-SG-1 的 Sub-Store 单条订阅，并使用其中全部节点作为落地。
 
 const yaml = ProxyUtils.yaml.safeLoad($content ?? $files[0]) || {};
 
@@ -27,6 +30,14 @@ const FALLBACK_ROOT_GROUP = '🚀 节点选择';
 
 function uniqueNames(items) {
   return Array.from(new Set((items || []).filter(Boolean)));
+}
+
+function uniqueProxies(proxies) {
+  const map = new Map();
+  for (const proxy of validProxies(proxies)) {
+    map.set(proxy.name, proxy);
+  }
+  return Array.from(map.values());
 }
 
 function validProxies(proxies) {
@@ -160,30 +171,64 @@ function getRootGroupName() {
     || FALLBACK_ROOT_GROUP;
 }
 
-function selectLandingProxies(allLandings) {
+function parseLandingNames() {
   const raw = getOption('landing');
-
-  // 未传参数：保持原行为，使用全部落地节点。
-  if (raw === undefined) return allLandings;
+  if (raw === undefined) return null;
 
   const value = cleanName(raw);
-  const normalized = value.toLowerCase();
-
-  if (['none', 'off', 'false', '0'].includes(normalized)) {
+  if (['none', 'off', 'false', '0'].includes(value.toLowerCase())) {
     return [];
   }
 
-  const wantedNames = uniqueNames(
+  return uniqueNames(
     value
       .split(',')
       .map(name => cleanName(name))
       .filter(Boolean)
   );
+}
 
-  if (!wantedNames.length) return allLandings;
+async function readSubscription(name) {
+  try {
+    const proxies = await produceArtifact({
+      type: 'subscription',
+      name,
+      platform: 'ClashMeta',
+      produceType: 'internal'
+    });
+    return validProxies(proxies);
+  } catch (_) {
+    return [];
+  }
+}
 
-  const wantedSet = new Set(wantedNames);
-  return allLandings.filter(proxy => wantedSet.has(proxy.name));
+async function resolveLandingProxies(allLandings) {
+  const wantedNames = parseLandingNames();
+
+  // 未传 landing：保持原行为，使用「落地节点」订阅中的全部节点。
+  if (wantedNames === null) return allLandings;
+
+  // landing=none/off/false/0
+  if (wantedNames.length === 0) return [];
+
+  const result = [];
+  const landingMap = new Map(allLandings.map(proxy => [proxy.name, proxy]));
+
+  for (const name of wantedNames) {
+    // 第一优先级：在「落地节点」汇总订阅中按节点名精确匹配。
+    const matchedProxy = landingMap.get(name);
+    if (matchedProxy) {
+      result.push(matchedProxy);
+      continue;
+    }
+
+    // 第二优先级：把参数值当成 Sub-Store subscription 名称读取。
+    // 这样可以给某个落地节点单独维护一个订阅。
+    const dedicatedProxies = await readSubscription(name);
+    result.push(...dedicatedProxies);
+  }
+
+  return uniqueProxies(result);
 }
 
 applyRuntimeOptions();
@@ -201,23 +246,10 @@ const airportProxies = await produceArtifact({
 const airports = validProxies(airportProxies);
 
 // -------------------------
-// 读取并筛选落地节点（可选）
+// 读取并解析落地节点（可选）
 // -------------------------
-let allLandings = [];
-
-try {
-  const landingProxies = await produceArtifact({
-    type: 'subscription',
-    name: LANDING_SUBSCRIPTION,
-    platform: 'ClashMeta',
-    produceType: 'internal'
-  });
-  allLandings = validProxies(landingProxies);
-} catch (_) {
-  allLandings = [];
-}
-
-const landings = selectLandingProxies(allLandings);
+const allLandings = await readSubscription(LANDING_SUBSCRIPTION);
+const landings = await resolveLandingProxies(allLandings);
 const landingEnabled = landings.length > 0;
 
 // -------------------------
@@ -335,7 +367,7 @@ if (landingEnabled) {
     });
   }
 } else {
-  // landing=none 或没有匹配到落地节点：只使用机场合集，保持模板原策略结构。
+  // landing=none 或没有匹配到节点/订阅：只使用机场合集，保持模板原策略结构。
   yaml.proxies = Array.from(merged.values());
 }
 
