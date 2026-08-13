@@ -9,6 +9,7 @@
 // 6. 顶层组仅包含：落地节点 + 🚀 手动选择。
 // 7. 落地节点不会进入自动选择、地区、全部节点等其他策略组。
 // 8. 如果「落地节点」不存在 / 无节点 / 读取失败，则不改策略组结构，仅注入机场合集。
+// 9. 注入本机进程规则：AdsPowerGlobal.exe 强制走 ♻️ 自动选择；Adobe 安装目录下进程禁止联网。
 
 const yaml = ProxyUtils.yaml.safeLoad($content ?? $files[0]) || {};
 
@@ -16,6 +17,7 @@ const AIRPORT_COLLECTION = '机场合集';
 const LANDING_SUBSCRIPTION = '落地节点';
 const OLD_MANUAL_GROUP = '🚀 节点选择';
 const MANUAL_GROUP = '🚀 手动选择';
+const AUTO_GROUP = '♻️ 自动选择';
 const FALLBACK_ROOT_GROUP = '🚀 节点选择';
 
 function uniqueNames(items) {
@@ -34,12 +36,9 @@ function escapeRegex(text = '') {
 
 function cleanName(value) {
   if (value === null || value === undefined) return '';
-  const text = String(value).trim();
-  return text;
+  return String(value).trim();
 }
 
-// 远程脚本参数由 Sub-Store 暴露为 $arguments。
-// 兼容未来/其他运行环境可能提供的参数对象。
 function getRootGroupNameFromArguments() {
   const candidates = [];
 
@@ -65,7 +64,7 @@ function getRootGroupNameFromArguments() {
 }
 
 // 当前 File Operator 在部分 Sub-Store 版本中 context.source 可能为 null。
-// 保留这套探测逻辑，便于未来版本若暴露文件元数据后自动生效。
+// 保留探测逻辑，未来若 Sub-Store 暴露文件元数据可自动使用。
 function getCurrentFileDisplayName() {
   const contexts = [];
 
@@ -84,7 +83,6 @@ function getCurrentFileDisplayName() {
 
       const source = ctx.source;
       if (source && typeof source === 'object') {
-        // Response Transformer/未来 File Operator 可能使用 $file。
         for (const key of ['$file', '_file', '_mihomoConfig', '_source']) {
           const value = source[key];
           if (value && typeof value === 'object') {
@@ -93,7 +91,6 @@ function getCurrentFileDisplayName() {
           }
         }
 
-        // 兼容订阅/合集一类 context.source 结构。
         for (const [key, value] of Object.entries(source)) {
           if (!key.startsWith('_') && value && typeof value === 'object') {
             const name = cleanName(value.displayName || value.name);
@@ -237,7 +234,6 @@ if (landingEnabled) {
 
   let rootGroupName = resolveRootGroupName();
 
-  // 顶层组不能和手动入口组同名，否则会产生自引用/覆盖。
   if (rootGroupName === MANUAL_GROUP) {
     rootGroupName = FALLBACK_ROOT_GROUP;
   }
@@ -288,5 +284,24 @@ if (landingEnabled) {
 } else {
   yaml.proxies = Array.from(merged.values());
 }
+
+// =====================================================
+// 自定义高优先级规则
+// =====================================================
+// PROCESS 规则必须放在 GEOIP / GEOSITE / MATCH 等通用规则之前。
+// Adobe 使用安装路径匹配：覆盖 Program Files\\Adobe、Common Files\\Adobe 等常见目录。
+const customRules = [
+  `PROCESS-NAME,AdsPowerGlobal.exe,${AUTO_GROUP}`,
+  'PROCESS-PATH-REGEX,(?i).*\\\\Adobe\\\\.*,REJECT'
+];
+
+yaml.rules = Array.isArray(yaml.rules) ? yaml.rules : [];
+
+// 防止重复执行脚本时不断追加相同规则。
+const customRuleSet = new Set(customRules);
+yaml.rules = [
+  ...customRules,
+  ...yaml.rules.filter(rule => !customRuleSet.has(rule))
+];
 
 $content = ProxyUtils.yaml.safeDump(yaml);
