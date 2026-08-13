@@ -8,9 +8,10 @@
 
 mixed-port: 7890
 allow-lan: true
-bind-address: "*"
+bind-address: '*'
 mode: rule
 log-level: info
+external-controller: '127.0.0.1:9090'
 ipv6: false
 unified-delay: true
 tcp-concurrent: true
@@ -26,48 +27,114 @@ proxies: []
 # DNS
 # =========================
 dns:
-  enable: true
   ipv6: false
-  enhanced-mode: fake-ip
-  fake-ip-range: 198.18.0.1/16
-  fake-ip-filter-mode: blacklist
+  enable: true
+  listen: '0.0.0.0:1053'
   use-hosts: true
-  use-system-hosts: true
 
-  # 用于解析 DoH/DoT 自身域名，必须是 IP
+  # 用于解析 DoH 上游域名；必须使用纯 IP DNS。
   default-nameserver:
     - 223.5.5.5
-    - 1.1.1.1
+    - 223.6.6.6
+    - 119.29.29.29
+    - 119.28.28.28
+    - 180.76.76.76
+    - 8.8.8.8
 
-  # 默认 DNS
+  # 默认 DNS 上游
   nameserver:
-    - https://dns.alidns.com/dns-query
-    - https://doh.pub/dns-query
+    - 'https://223.5.5.5/dns-query'
+    - 'https://koala.madns-lemon.site:2443/dns-query'
+    - 'https://whale.madns-peach.site:2443/dns-query'
+    - 'https://otter.madns-pear.site:2443/dns-query'
+    - 'https://rhino.madns-berry.site:2443/dns-query'
+    - 'https://cobra.madns-cherry.site:2443/dns-query'
+    - 'https://doh.pub/dns-query'
+    - 'https://dns.alidns.com/dns-query'
 
-  # 代理节点域名解析，避免节点域名解析依赖代理本身
-  proxy-server-nameserver:
-    - https://dns.alidns.com/dns-query
-    - https://doh.pub/dns-query
+  enhanced-mode: fake-ip
+  fake-ip-range: 198.18.0.1/16
 
-  # 海外 DNS 作为备用
-  fallback:
-    - https://1.1.1.1/dns-query
-    - https://8.8.8.8/dns-query
-
-  fallback-filter:
-    geoip: true
-    geoip-code: CN
-    geosite:
-      - gfw
-
-  # 常见不适合 Fake-IP 的域名
+  # 以下域名绕过 Fake-IP，兼容局域网、NTP、STUN、游戏平台、音乐/视频等场景。
   fake-ip-filter:
     - '*.lan'
+    - '*.localdomain'
+    - '*.example'
+    - '*.invalid'
+    - '*.localhost'
+    - '*.test'
     - '*.local'
+    - '*.home.arpa'
+    - 'time.*.com'
+    - 'time.*.gov'
+    - 'time.*.edu.cn'
+    - 'time.*.apple.com'
+    - 'time1.*.com'
+    - 'time2.*.com'
+    - 'time3.*.com'
+    - 'time4.*.com'
+    - 'time5.*.com'
+    - 'time6.*.com'
+    - 'time7.*.com'
+    - 'ntp.*.com'
+    - 'ntp1.*.com'
+    - 'ntp2.*.com'
+    - 'ntp3.*.com'
+    - 'ntp4.*.com'
+    - 'ntp5.*.com'
+    - 'ntp6.*.com'
+    - 'ntp7.*.com'
+    - '*.time.edu.cn'
+    - '*.ntp.org.cn'
+    - '+.pool.ntp.org'
+    - 'time1.cloud.tencent.com'
+    - 'stun.*.*'
+    - 'stun.*.*.*'
+    - 'swscan.apple.com'
+    - 'mesu.apple.com'
+    - 'music.163.com'
+    - '*.music.163.com'
+    - '*.126.net'
+    - 'musicapi.taihe.com'
+    - 'music.taihe.com'
+    - 'songsearch.kugou.com'
+    - 'trackercdn.kugou.com'
+    - '*.kuwo.cn'
+    - 'api-jooxtt.sanook.com'
+    - 'api.joox.com'
+    - 'y.qq.com'
+    - '*.y.qq.com'
+    - 'streamoc.music.tc.qq.com'
+    - 'mobileoc.music.tc.qq.com'
+    - 'isure.stream.qqmusic.qq.com'
+    - 'dl.stream.qqmusic.qq.com'
+    - 'aqqmusic.tc.qq.com'
+    - 'amobile.music.tc.qq.com'
     - 'localhost.ptlogin2.qq.com'
-    - '+.stun.*.*'
-    - '+.stun.*.*.*'
-    - '+.stun.*.*.*.*'
+    - '*.msftconnecttest.com'
+    - '*.msftncsi.com'
+    - '*.xiami.com'
+    - '*.music.migu.cn'
+    - 'music.migu.cn'
+    - '+.wotgame.cn'
+    - '+.wggames.cn'
+    - '+.wowsgame.cn'
+    - '+.wargaming.net'
+    - '*.*.*.srv.nintendo.net'
+    - '*.*.stun.playstation.net'
+    - 'xbox.*.*.microsoft.com'
+    - '*.*.xboxlive.com'
+    - '*.ipv6.microsoft.com'
+    - 'teredo.*.*.*'
+    - 'teredo.*.*'
+    - 'speedtest.cros.wr.pvp.net'
+    - '+.jjvip8.com'
+    - 'www.douyu.com'
+    - 'activityapi.huya.com'
+    - 'activityapi.huya.com.w.cdngslb.com'
+    - 'www.bilibili.com'
+    - 'api.bilibili.com'
+    - 'a.w.bilicdn1.com'
 
 # =========================
 # 策略组
