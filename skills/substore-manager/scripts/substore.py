@@ -36,7 +36,7 @@ def q(s): return urllib.parse.quote(s,safe='')
 def link(landing=None,mode=None):
     base,fn=cfg(); u=f'{base}/api/file/{q(fn)}'; p=[]
     if landing is not None:p.append(('landing',landing))
-    if mode:p.append(('mode',mode))
+    if mode:p.append(('mihomoMode',mode))
     return u+('?' + urllib.parse.urlencode(p) if p else '')
 
 def main():
