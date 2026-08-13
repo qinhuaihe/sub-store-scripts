@@ -1,0 +1,6 @@
+# 自定义拒绝联网规则
+# 这里只写“匹配条件”，不要写 REJECT。
+# 实际动作由 Mihomo 配置中的 RULE-SET 决定。
+
+payload:
+  - PROCESS-PATH-REGEX,(?i).*\\Adobe\\.*
