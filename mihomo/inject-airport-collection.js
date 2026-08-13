@@ -5,12 +5,30 @@
 // 2. 如果存在「落地节点」subscription，则把落地节点注入配置。
 // 3. 原「🚀 节点选择」改名为「🚀 手动选择」，继续作为机场入口路线选择组。
 // 4. 所有落地节点设置 dialer-proxy: 🚀 手动选择。
-// 5. 新建顶层 select 组：优先使用 rootGroupName 参数，其次尝试当前文件显示名称，最后使用默认名称。
+// 5. 新建顶层 select 组：优先使用 URL 参数 rootGroupName，其次脚本参数，再尝试当前文件显示名称，最后使用默认名称。
 // 6. 顶层组仅包含：落地节点 + 🚀 手动选择。
 // 7. 落地节点不会进入自动选择、地区、全部节点等其他策略组。
 // 8. 如果「落地节点」不存在 / 无节点 / 读取失败，则不改策略组结构，仅注入机场合集。
+// 9. 支持从最终订阅 URL query 动态调整 Mihomo：profile / mode / dns / rootGroupName。
 //
-// 注意：本脚本只负责节点注入和落地链路，不负责 rule-provider 或自定义规则注入。
+// URL 参数示例：
+//   ?mode=global
+//   ?dns=global
+//   ?profile=router
+//   ?profile=phone&mode=rule&dns=cn
+//   ?rootGroupName=MyProxy
+//
+// 参数说明：
+//   profile=default  不额外覆盖模板
+//   profile=home     家庭/局域网：allow-lan=true，DNS 默认 cn
+//   profile=router   路由器：allow-lan=true，bind-address=*，DNS 默认 cn
+//   profile=phone    手机：allow-lan=false，DNS 默认 global
+//   mode=rule|global|direct
+//   dns=default|cn|global|off
+//
+// 显式 mode/dns 参数优先于 profile 预设。
+//
+// 注意：本脚本只负责节点注入、落地链路和少量运行时配置，不负责 rule-provider 或自定义规则注入。
 
 const yaml = ProxyUtils.yaml.safeLoad($content ?? $files[0]) || {};
 
@@ -39,28 +57,138 @@ function cleanName(value) {
   return String(value).trim();
 }
 
-function getRootGroupNameFromArguments() {
-  const candidates = [];
+function lower(value) {
+  return cleanName(value).toLowerCase();
+}
 
+function getRequestQuery() {
   try {
-    if (typeof $arguments !== 'undefined' && $arguments) candidates.push($arguments);
+    if (
+      typeof $options !== 'undefined' &&
+      $options &&
+      $options._req &&
+      $options._req.query &&
+      typeof $options._req.query === 'object'
+    ) {
+      return $options._req.query;
+    }
+  } catch (_) {}
+
+  return {};
+}
+
+const requestQuery = getRequestQuery();
+
+function getScriptArguments() {
+  try {
+    if (typeof $arguments !== 'undefined' && $arguments && typeof $arguments === 'object') {
+      return $arguments;
+    }
   } catch (_) {}
 
   try {
     if (typeof arguments !== 'undefined' && arguments && typeof arguments === 'object') {
-      candidates.push(arguments);
+      return arguments;
     }
   } catch (_) {}
 
-  for (const args of candidates) {
-    try {
-      const value = args.rootGroupName ?? args.root_group_name ?? args.groupName;
-      const name = cleanName(value);
-      if (name) return name;
-    } catch (_) {}
+  return {};
+}
+
+const scriptArguments = getScriptArguments();
+
+function getOption(...keys) {
+  for (const key of keys) {
+    const queryValue = requestQuery[key];
+    if (queryValue !== undefined && queryValue !== null && queryValue !== '') {
+      return queryValue;
+    }
   }
 
-  return '';
+  for (const key of keys) {
+    const argValue = scriptArguments[key];
+    if (argValue !== undefined && argValue !== null && argValue !== '') {
+      return argValue;
+    }
+  }
+
+  return undefined;
+}
+
+function applyDnsPreset(preset) {
+  const value = lower(preset);
+  if (!value || value === 'default') return;
+
+  yaml.dns = yaml.dns && typeof yaml.dns === 'object' ? yaml.dns : {};
+
+  if (value === 'off' || value === 'false' || value === '0') {
+    yaml.dns.enable = false;
+    return;
+  }
+
+  yaml.dns.enable = true;
+
+  if (value === 'cn') {
+    yaml.dns['default-nameserver'] = [
+      '223.5.5.5',
+      '223.6.6.6',
+      '119.29.29.29',
+      '119.28.28.28'
+    ];
+    yaml.dns.nameserver = [
+      'https://223.5.5.5/dns-query',
+      'https://doh.pub/dns-query',
+      'https://dns.alidns.com/dns-query'
+    ];
+    return;
+  }
+
+  if (value === 'global') {
+    yaml.dns['default-nameserver'] = [
+      '1.1.1.1',
+      '8.8.8.8',
+      '9.9.9.9'
+    ];
+    yaml.dns.nameserver = [
+      'https://1.1.1.1/dns-query',
+      'https://8.8.8.8/dns-query',
+      'https://dns.quad9.net/dns-query'
+    ];
+  }
+}
+
+function applyRuntimeOptions() {
+  const profile = lower(getOption('profile')) || 'default';
+
+  // profile 只提供温和的运行环境预设，不改规则和策略组。
+  if (profile === 'home') {
+    yaml['allow-lan'] = true;
+    if (getOption('dns') === undefined) applyDnsPreset('cn');
+  } else if (profile === 'router') {
+    yaml['allow-lan'] = true;
+    yaml['bind-address'] = '*';
+    if (getOption('dns') === undefined) applyDnsPreset('cn');
+  } else if (profile === 'phone') {
+    yaml['allow-lan'] = false;
+    if (getOption('dns') === undefined) applyDnsPreset('global');
+  }
+
+  const mode = lower(getOption('mode'));
+  if (['rule', 'global', 'direct'].includes(mode)) {
+    yaml.mode = mode;
+  }
+
+  const dns = getOption('dns');
+  if (dns !== undefined) {
+    applyDnsPreset(dns);
+  }
+}
+
+applyRuntimeOptions();
+
+function getRootGroupNameFromOptions() {
+  const value = getOption('rootGroupName', 'root_group_name', 'groupName');
+  return cleanName(value);
 }
 
 // 当前 File Operator 在部分 Sub-Store 版本中 context.source 可能为 null。
@@ -123,7 +251,7 @@ function getCurrentFileDisplayName() {
 }
 
 function resolveRootGroupName() {
-  return getRootGroupNameFromArguments()
+  return getRootGroupNameFromOptions()
     || getCurrentFileDisplayName()
     || FALLBACK_ROOT_GROUP;
 }
