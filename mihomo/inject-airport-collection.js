@@ -9,8 +9,8 @@
 // 6. 顶层组仅包含：落地节点 + 🚀 手动选择。
 // 7. 落地节点不会进入自动选择、地区、全部节点等其他策略组。
 // 8. 如果「落地节点」不存在 / 无节点 / 读取失败，则不改策略组结构，仅注入机场合集。
-// 9. 注入自定义 rule-providers：custom-proxy / custom-direct / custom-reject。
-//    provider 只保存匹配条件，真正的策略组/动作由当前配置中的 RULE-SET 决定。
+//
+// 注意：本脚本只负责节点注入和落地链路，不负责 rule-provider 或自定义规则注入。
 
 const yaml = ProxyUtils.yaml.safeLoad($content ?? $files[0]) || {};
 
@@ -18,36 +18,7 @@ const AIRPORT_COLLECTION = '机场合集';
 const LANDING_SUBSCRIPTION = '落地节点';
 const OLD_MANUAL_GROUP = '🚀 节点选择';
 const MANUAL_GROUP = '🚀 手动选择';
-const AUTO_GROUP = '♻️ 自动选择';
 const FALLBACK_ROOT_GROUP = '🚀 节点选择';
-
-const RULE_PROVIDER_BASE = 'https://raw.githubusercontent.com/qinhuaihe/sub-store-scripts/main/rules';
-const CUSTOM_PROVIDER_DEFS = {
-  'custom-reject': {
-    type: 'http',
-    behavior: 'classical',
-    format: 'yaml',
-    url: `${RULE_PROVIDER_BASE}/custom-reject.yaml`,
-    path: './ruleset/custom-reject.yaml',
-    interval: 86400
-  },
-  'custom-proxy': {
-    type: 'http',
-    behavior: 'classical',
-    format: 'yaml',
-    url: `${RULE_PROVIDER_BASE}/custom-proxy.yaml`,
-    path: './ruleset/custom-proxy.yaml',
-    interval: 86400
-  },
-  'custom-direct': {
-    type: 'http',
-    behavior: 'classical',
-    format: 'yaml',
-    url: `${RULE_PROVIDER_BASE}/custom-direct.yaml`,
-    path: './ruleset/custom-direct.yaml',
-    interval: 86400
-  }
-};
 
 function uniqueNames(items) {
   return Array.from(new Set((items || []).filter(Boolean)));
@@ -313,40 +284,5 @@ if (landingEnabled) {
 } else {
   yaml.proxies = Array.from(merged.values());
 }
-
-// =====================================================
-// 自定义 Rule Providers
-// =====================================================
-// provider 文件只保存匹配条件，不写任何策略组名：
-// - custom-proxy.yaml  -> 当前配置决定走哪个代理组
-// - custom-direct.yaml -> DIRECT
-// - custom-reject.yaml -> REJECT
-//
-// 这样 provider 可以被不同配置复用，不依赖某个具体配置的组名。
-yaml['rule-providers'] = {
-  ...(yaml['rule-providers'] || {}),
-  ...CUSTOM_PROVIDER_DEFS
-};
-
-yaml.rules = Array.isArray(yaml.rules) ? yaml.rules : [];
-
-const customRulePrefixes = [
-  'RULE-SET,custom-reject,',
-  'RULE-SET,custom-proxy,',
-  'RULE-SET,custom-direct,'
-];
-
-// 如果以后配置中已有同名 RULE-SET，先移除，避免重复和旧策略残留。
-yaml.rules = yaml.rules.filter(rule => {
-  if (typeof rule !== 'string') return true;
-  return !customRulePrefixes.some(prefix => rule.startsWith(prefix));
-});
-
-// 自定义规则保持最高优先级。
-yaml.rules.unshift(
-  'RULE-SET,custom-reject,REJECT',
-  `RULE-SET,custom-proxy,${AUTO_GROUP}`,
-  'RULE-SET,custom-direct,DIRECT'
-);
 
 $content = ProxyUtils.yaml.safeDump(yaml);
