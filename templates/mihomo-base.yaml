@@ -1,0 +1,195 @@
+# Mihomo 基础模板
+# 设计目标：
+# 1. 作为 Sub-Store 的“mihomo 配置”模板使用
+# 2. 节点由 Sub-Store 后续注入/合并，因此这里不写具体代理节点
+# 3. 与 rename-proxies.js 的命名格式配合：
+#    [订阅名] 🇭🇰 香港 HK [协议] 01
+# 4. 信息节点（流量/到期）保留展示，但不会进入可选代理组
+
+mixed-port: 7890
+allow-lan: true
+bind-address: "*"
+mode: rule
+log-level: info
+ipv6: false
+unified-delay: true
+tcp-concurrent: true
+
+profile:
+  store-selected: true
+  store-fake-ip: true
+
+# 代理节点由 Sub-Store 注入
+proxies: []
+
+# =========================
+# DNS
+# =========================
+dns:
+  enable: true
+  ipv6: false
+  enhanced-mode: fake-ip
+  fake-ip-range: 198.18.0.1/16
+  fake-ip-filter-mode: blacklist
+  use-hosts: true
+  use-system-hosts: true
+
+  # 用于解析 DoH/DoT 自身域名，必须是 IP
+  default-nameserver:
+    - 223.5.5.5
+    - 1.1.1.1
+
+  # 默认 DNS
+  nameserver:
+    - https://dns.alidns.com/dns-query
+    - https://doh.pub/dns-query
+
+  # 代理节点域名解析，避免节点域名解析依赖代理本身
+  proxy-server-nameserver:
+    - https://dns.alidns.com/dns-query
+    - https://doh.pub/dns-query
+
+  # 海外 DNS 作为备用
+  fallback:
+    - https://1.1.1.1/dns-query
+    - https://8.8.8.8/dns-query
+
+  fallback-filter:
+    geoip: true
+    geoip-code: CN
+    geosite:
+      - gfw
+
+  # 常见不适合 Fake-IP 的域名
+  fake-ip-filter:
+    - '*.lan'
+    - '*.local'
+    - 'localhost.ptlogin2.qq.com'
+    - '+.stun.*.*'
+    - '+.stun.*.*.*'
+    - '+.stun.*.*.*.*'
+
+# =========================
+# 策略组
+# =========================
+# rename-proxies.js 会保留流量、到期信息节点。
+# 这些节点用于展示，不应该作为真正代理节点参与策略组选择。
+# 所有 include-all 策略组统一排除这些名称。
+
+proxy-groups:
+  - name: 🚀 节点选择
+    type: select
+    proxies:
+      - ♻️ 自动选择
+      - 🇭🇰 香港
+      - 🇹🇼 台湾
+      - 🇯🇵 日本
+      - 🇸🇬 新加坡
+      - 🇺🇸 美国
+      - 🌍 其他地区
+      - 🌐 全部节点
+      - DIRECT
+
+  - name: ♻️ 自动选择
+    type: url-test
+    include-all: true
+    exclude-type: direct
+    exclude-filter: '(?i)(📊|⏳|流量|到期|traffic|expire|expiration|expiry)'
+    url: https://www.gstatic.com/generate_204
+    interval: 300
+    tolerance: 50
+    lazy: true
+
+  - name: 🇭🇰 香港
+    type: url-test
+    include-all: true
+    exclude-type: direct
+    filter: '(?i)(香港|\bHK\b|Hong\s*Kong)'
+    exclude-filter: '(?i)(📊|⏳|流量|到期|traffic|expire|expiration|expiry)'
+    url: https://www.gstatic.com/generate_204
+    interval: 300
+    tolerance: 50
+    lazy: true
+
+  - name: 🇹🇼 台湾
+    type: url-test
+    include-all: true
+    exclude-type: direct
+    filter: '(?i)(台湾|\bTW\b|Taiwan)'
+    exclude-filter: '(?i)(📊|⏳|流量|到期|traffic|expire|expiration|expiry)'
+    url: https://www.gstatic.com/generate_204
+    interval: 300
+    tolerance: 50
+    lazy: true
+
+  - name: 🇯🇵 日本
+    type: url-test
+    include-all: true
+    exclude-type: direct
+    filter: '(?i)(日本|\bJP\b|Japan)'
+    exclude-filter: '(?i)(📊|⏳|流量|到期|traffic|expire|expiration|expiry)'
+    url: https://www.gstatic.com/generate_204
+    interval: 300
+    tolerance: 50
+    lazy: true
+
+  - name: 🇸🇬 新加坡
+    type: url-test
+    include-all: true
+    exclude-type: direct
+    filter: '(?i)(新加坡|\bSG\b|Singapore)'
+    exclude-filter: '(?i)(📊|⏳|流量|到期|traffic|expire|expiration|expiry)'
+    url: https://www.gstatic.com/generate_204
+    interval: 300
+    tolerance: 50
+    lazy: true
+
+  - name: 🇺🇸 美国
+    type: url-test
+    include-all: true
+    exclude-type: direct
+    filter: '(?i)(美国|\bUS\b|United\s*States|America)'
+    exclude-filter: '(?i)(📊|⏳|流量|到期|traffic|expire|expiration|expiry)'
+    url: https://www.gstatic.com/generate_204
+    interval: 300
+    tolerance: 50
+    lazy: true
+
+  - name: 🌍 其他地区
+    type: select
+    include-all: true
+    exclude-type: direct
+    exclude-filter: '(?i)(📊|⏳|流量|到期|traffic|expire|expiration|expiry|香港|\bHK\b|Hong\s*Kong|台湾|\bTW\b|Taiwan|日本|\bJP\b|Japan|新加坡|\bSG\b|Singapore|美国|\bUS\b|United\s*States|America)'
+
+  - name: 🌐 全部节点
+    type: select
+    include-all: true
+    exclude-type: direct
+    exclude-filter: '(?i)(📊|⏳|流量|到期|traffic|expire|expiration|expiry)'
+
+  - name: 🏠 国内直连
+    type: select
+    proxies:
+      - DIRECT
+      - 🚀 节点选择
+
+  - name: 🐟 漏网之鱼
+    type: select
+    proxies:
+      - 🚀 节点选择
+      - DIRECT
+
+# =========================
+# 规则
+# =========================
+# 保持基础规则尽量简单，依赖 Mihomo 自带 GEOSITE/GEOIP 数据。
+# 以后如果需要广告、流媒体、AI、Telegram 等独立分流，
+# 可以再拆成 rule-providers，而不需要改节点逻辑。
+
+rules:
+  - GEOSITE,private,DIRECT
+  - GEOIP,private,DIRECT,no-resolve
+  - GEOSITE,CN,🏠 国内直连
+  - GEOIP,CN,🏠 国内直连,no-resolve
+  - GEOSITE,geolocation-!cn,🚀 节点选择
+  - MATCH,🐟 漏网之鱼
