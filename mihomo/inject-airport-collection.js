@@ -3,32 +3,19 @@
 // 作用：
 // 1. 把「机场合集」collection 的全部节点注入当前 Mihomo 配置。
 // 2. 如果存在「落地节点」subscription，则把落地节点注入配置。
-// 3. 原「🚀 节点选择」改名为「🚀 手动选择」，继续作为机场入口路线选择组。
+// 3. 原「🚀 节点选择」改名为「🚀 手动选择」，作为机场入口路线选择组。
 // 4. 所有落地节点设置 dialer-proxy: 🚀 手动选择。
-// 5. 新建顶层 select 组：优先使用 URL 参数 rootGroupName，其次脚本参数，再尝试当前文件显示名称，最后使用默认名称。
-// 6. 顶层组仅包含：落地节点 + 🚀 手动选择。
-// 7. 落地节点不会进入自动选择、地区、全部节点等其他策略组。
-// 8. 如果「落地节点」不存在 / 无节点 / 读取失败，则不改策略组结构，仅注入机场合集。
-// 9. 支持从最终订阅 URL query 动态调整 Mihomo：profile / mode / dns / rootGroupName。
+// 5. 顶层 select 组仅包含：落地节点 + 🚀 手动选择。
+// 6. 落地节点不会进入自动选择、地区、全部节点等其他策略组。
+// 7. 支持最终订阅 URL query：profile / mode / dns / rootGroupName / landing。
 //
-// URL 参数示例：
-//   ?mode=global
-//   ?dns=global
-//   ?profile=router
-//   ?profile=phone&mode=rule&dns=cn
-//   ?rootGroupName=MyProxy
+// landing 参数：
+//   不传 landing            使用「落地节点」订阅中的全部节点
+//   ?landing=节点名称       仅使用指定落地节点
+//   ?landing=节点A,节点B    仅使用指定的多个落地节点
+//   ?landing=none           禁用全部落地节点，机场直接出站
 //
-// 参数说明：
-//   profile=default  不额外覆盖模板
-//   profile=home     家庭/局域网：allow-lan=true，DNS 默认 cn
-//   profile=router   路由器：allow-lan=true，bind-address=*，DNS 默认 cn
-//   profile=phone    手机：allow-lan=false，DNS 默认 global
-//   mode=rule|global|direct
-//   dns=default|cn|global|off
-//
-// 显式 mode/dns 参数优先于 profile 预设。
-//
-// 注意：本脚本只负责节点注入、落地链路和少量运行时配置，不负责 rule-provider 或自定义规则注入。
+// 注意：landing 按节点名称精确匹配，建议节点名保持唯一。
 
 const yaml = ProxyUtils.yaml.safeLoad($content ?? $files[0]) || {};
 
@@ -73,11 +60,8 @@ function getRequestQuery() {
       return $options._req.query;
     }
   } catch (_) {}
-
   return {};
 }
-
-const requestQuery = getRequestQuery();
 
 function getScriptArguments() {
   try {
@@ -85,31 +69,21 @@ function getScriptArguments() {
       return $arguments;
     }
   } catch (_) {}
-
-  try {
-    if (typeof arguments !== 'undefined' && arguments && typeof arguments === 'object') {
-      return arguments;
-    }
-  } catch (_) {}
-
   return {};
 }
 
+const requestQuery = getRequestQuery();
 const scriptArguments = getScriptArguments();
 
 function getOption(...keys) {
   for (const key of keys) {
-    const queryValue = requestQuery[key];
-    if (queryValue !== undefined && queryValue !== null && queryValue !== '') {
-      return queryValue;
-    }
+    const value = requestQuery[key];
+    if (value !== undefined && value !== null && value !== '') return value;
   }
 
   for (const key of keys) {
-    const argValue = scriptArguments[key];
-    if (argValue !== undefined && argValue !== null && argValue !== '') {
-      return argValue;
-    }
+    const value = scriptArguments[key];
+    if (value !== undefined && value !== null && value !== '') return value;
   }
 
   return undefined;
@@ -121,7 +95,7 @@ function applyDnsPreset(preset) {
 
   yaml.dns = yaml.dns && typeof yaml.dns === 'object' ? yaml.dns : {};
 
-  if (value === 'off' || value === 'false' || value === '0') {
+  if (['off', 'false', '0'].includes(value)) {
     yaml.dns.enable = false;
     return;
   }
@@ -160,7 +134,6 @@ function applyDnsPreset(preset) {
 function applyRuntimeOptions() {
   const profile = lower(getOption('profile')) || 'default';
 
-  // profile 只提供温和的运行环境预设，不改规则和策略组。
   if (profile === 'home') {
     yaml['allow-lan'] = true;
     if (getOption('dns') === undefined) applyDnsPreset('cn');
@@ -179,82 +152,41 @@ function applyRuntimeOptions() {
   }
 
   const dns = getOption('dns');
-  if (dns !== undefined) {
-    applyDnsPreset(dns);
+  if (dns !== undefined) applyDnsPreset(dns);
+}
+
+function getRootGroupName() {
+  return cleanName(getOption('rootGroupName', 'root_group_name', 'groupName'))
+    || FALLBACK_ROOT_GROUP;
+}
+
+function selectLandingProxies(allLandings) {
+  const raw = getOption('landing');
+
+  // 未传参数：保持原行为，使用全部落地节点。
+  if (raw === undefined) return allLandings;
+
+  const value = cleanName(raw);
+  const normalized = value.toLowerCase();
+
+  if (['none', 'off', 'false', '0'].includes(normalized)) {
+    return [];
   }
+
+  const wantedNames = uniqueNames(
+    value
+      .split(',')
+      .map(name => cleanName(name))
+      .filter(Boolean)
+  );
+
+  if (!wantedNames.length) return allLandings;
+
+  const wantedSet = new Set(wantedNames);
+  return allLandings.filter(proxy => wantedSet.has(proxy.name));
 }
 
 applyRuntimeOptions();
-
-function getRootGroupNameFromOptions() {
-  const value = getOption('rootGroupName', 'root_group_name', 'groupName');
-  return cleanName(value);
-}
-
-// 当前 File Operator 在部分 Sub-Store 版本中 context.source 可能为 null。
-// 保留探测逻辑，未来若 Sub-Store 暴露文件元数据可自动使用。
-function getCurrentFileDisplayName() {
-  const contexts = [];
-
-  try {
-    if (typeof context !== 'undefined' && context) contexts.push(context);
-  } catch (_) {}
-
-  try {
-    if (typeof $context !== 'undefined' && $context) contexts.push($context);
-  } catch (_) {}
-
-  for (const ctx of contexts) {
-    try {
-      const directName = cleanName(ctx.displayName || ctx.name);
-      if (directName) return directName;
-
-      const source = ctx.source;
-      if (source && typeof source === 'object') {
-        for (const key of ['$file', '_file', '_mihomoConfig', '_source']) {
-          const value = source[key];
-          if (value && typeof value === 'object') {
-            const name = cleanName(value.displayName || value.name);
-            if (name) return name;
-          }
-        }
-
-        for (const [key, value] of Object.entries(source)) {
-          if (!key.startsWith('_') && value && typeof value === 'object') {
-            const name = cleanName(value.displayName || value.name);
-            if (name) return name;
-          }
-        }
-      }
-    } catch (_) {}
-  }
-
-  try {
-    if (typeof $options !== 'undefined' && $options) {
-      const candidates = [
-        $options.file,
-        $options._file,
-        $options.source,
-        $options._source
-      ];
-
-      for (const item of candidates) {
-        if (item && typeof item === 'object') {
-          const name = cleanName(item.displayName || item.name);
-          if (name) return name;
-        }
-      }
-    }
-  } catch (_) {}
-
-  return '';
-}
-
-function resolveRootGroupName() {
-  return getRootGroupNameFromOptions()
-    || getCurrentFileDisplayName()
-    || FALLBACK_ROOT_GROUP;
-}
 
 // -------------------------
 // 读取机场合集（必需）
@@ -269,10 +201,9 @@ const airportProxies = await produceArtifact({
 const airports = validProxies(airportProxies);
 
 // -------------------------
-// 可选读取落地节点
+// 读取并筛选落地节点（可选）
 // -------------------------
-let landings = [];
-let landingEnabled = false;
+let allLandings = [];
 
 try {
   const landingProxies = await produceArtifact({
@@ -281,13 +212,13 @@ try {
     platform: 'ClashMeta',
     produceType: 'internal'
   });
-
-  landings = validProxies(landingProxies);
-  landingEnabled = landings.length > 0;
+  allLandings = validProxies(landingProxies);
 } catch (_) {
-  landings = [];
-  landingEnabled = false;
+  allLandings = [];
 }
+
+const landings = selectLandingProxies(allLandings);
+const landingEnabled = landings.length > 0;
 
 // -------------------------
 // 合并 proxies
@@ -339,7 +270,6 @@ if (landingEnabled) {
     ? `(?:${landingNames.map(name => `^${escapeRegex(name)}$`).join('|')})`
     : '';
 
-  // 落地节点只允许出现在顶层组，不能混入其他策略组。
   for (const group of yaml['proxy-groups']) {
     if (!group || group === manualGroup) continue;
 
@@ -360,11 +290,8 @@ if (landingEnabled) {
     manualGroup.proxies = manualGroup.proxies.filter(name => !landingNameSet.has(name));
   }
 
-  let rootGroupName = resolveRootGroupName();
-
-  if (rootGroupName === MANUAL_GROUP) {
-    rootGroupName = FALLBACK_ROOT_GROUP;
-  }
+  let rootGroupName = getRootGroupName();
+  if (rootGroupName === MANUAL_GROUP) rootGroupName = FALLBACK_ROOT_GROUP;
 
   let rootGroup = findGroup(rootGroupName);
 
@@ -389,7 +316,6 @@ if (landingEnabled) {
   delete rootGroup['exclude-filter'];
   delete rootGroup['exclude-type'];
 
-  // 原来引用「🚀 节点选择」的其他策略组改为引用新的顶层组。
   for (const group of yaml['proxy-groups']) {
     if (!group || group === rootGroup || group === manualGroup) continue;
 
@@ -402,7 +328,6 @@ if (landingEnabled) {
     }
   }
 
-  // 原规则最终出口改为新的顶层组。
   if (Array.isArray(yaml.rules)) {
     yaml.rules = yaml.rules.map(rule => {
       if (typeof rule !== 'string') return rule;
@@ -410,6 +335,7 @@ if (landingEnabled) {
     });
   }
 } else {
+  // landing=none 或没有匹配到落地节点：只使用机场合集，保持模板原策略结构。
   yaml.proxies = Array.from(merged.values());
 }
 
