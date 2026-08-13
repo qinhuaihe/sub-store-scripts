@@ -1,0 +1,6 @@
+# 自定义强制代理规则
+# 这里只写“匹配条件”，不要写策略组名称。
+# 实际走哪个策略组由 Mihomo 配置中的 RULE-SET 决定。
+
+payload:
+  - PROCESS-NAME,AdsPowerGlobal.exe
