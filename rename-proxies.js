@@ -1,9 +1,7 @@
 async function operator(proxies, targetPlatform, context) {
   const counters = new Map();
 
-  // =========================
-  // ISO -> 中文国家/地区名称
-  // =========================
+  // ISO 3166-1 alpha-2 -> 中文国家/地区名称
   const countryNames = {
     HK: '香港',
     MO: '澳门',
@@ -53,18 +51,11 @@ async function operator(proxies, targetPlatform, context) {
     AE: '阿联酋',
     IL: '以色列',
     SA: '沙特阿拉伯',
-
     ZA: '南非'
   };
 
-  // =========================
-  // 工具函数
-  // =========================
-
   function normalizeSpace(str = '') {
-    return String(str)
-      .replace(/\s+/g, ' ')
-      .trim();
+    return String(str).replace(/\s+/g, ' ').trim();
   }
 
   function removeFlagEmoji(name = '') {
@@ -73,27 +64,20 @@ async function operator(proxies, targetPlatform, context) {
     );
   }
 
-  function normalizeUnit(unit = '') {
-    return String(unit).toUpperCase();
-  }
-
   function formatNumberUnit(number, unit) {
-    return `${number} ${normalizeUnit(unit)}`;
+    return `${number} ${String(unit).toUpperCase()}`;
   }
 
   // =========================
-  // 流量识别
+  // 流量信息识别
   // =========================
-
   function parseTraffic(name = '') {
     const text = normalizeSpace(name);
 
     // 剩余流量：183.39 GB
-    // 剩余：183.39GB
     // Remaining Traffic: 183.39 GB
-    // Remaining: 183.39GB
     let match = text.match(
-      /(?:剩余流量|剩余|remaining(?:\s+traffic)?|traffic\s+remaining)\s*[:：]?\s*(\d+(?:\.\d+)?)\s*(KB|MB|GB|TB|PB)/i
+      /(?:剩余流量|可用流量|剩余|remaining(?:\s+traffic)?|traffic\s+remaining|available(?:\s+traffic)?)\s*[:：]?\s*(\d+(?:\.\d+)?)\s*(KB|MB|GB|TB|PB)/i
     );
 
     if (match) {
@@ -104,11 +88,9 @@ async function operator(proxies, targetPlatform, context) {
     }
 
     // 已用流量：30 GB
-    // 已用：30GB
     // Used Traffic: 30 GB
-    // Used: 30GB
     match = text.match(
-      /(?:已用流量|已用|used(?:\s+traffic)?|traffic\s+used)\s*[:：]?\s*(\d+(?:\.\d+)?)\s*(KB|MB|GB|TB|PB)/i
+      /(?:已用流量|已使用|已用|used(?:\s+traffic)?|traffic\s+used)\s*[:：]?\s*(\d+(?:\.\d+)?)\s*(KB|MB|GB|TB|PB)/i
     );
 
     if (match) {
@@ -120,7 +102,6 @@ async function operator(proxies, targetPlatform, context) {
 
     // 总流量：850 GB
     // Total Traffic: 850 GB
-    // Total: 850GB
     match = text.match(
       /(?:总流量|总量|套餐流量|total(?:\s+traffic)?|traffic\s+total)\s*[:：]?\s*(\d+(?:\.\d+)?)\s*(KB|MB|GB|TB|PB)/i
     );
@@ -151,66 +132,13 @@ async function operator(proxies, targetPlatform, context) {
   }
 
   // =========================
-  // 重置时间识别
+  // 到期日期识别
+  // 只保留明确日期，不再保留“剩余 X 天”类信息节点
   // =========================
-
-  function parseReset(name = '') {
-    const text = normalizeSpace(name);
-
-    if (!/(?:traffic\s*)?reset|renew|重置|流量重置|刷新/i.test(text)) {
-      return null;
-    }
-
-    // 24 Days Left
-    // Reset in 24 days
-    // 24 天
-    let match = text.match(
-      /(\d+(?:\.\d+)?)\s*(?:days?|day|天)/i
-    );
-
-    if (match) {
-      return {
-        value: `${match[1]} 天`
-      };
-    }
-
-    // 12 Hours
-    match = text.match(
-      /(\d+(?:\.\d+)?)\s*(?:hours?|hrs?|小时)/i
-    );
-
-    if (match) {
-      return {
-        value: `${match[1]} 小时`
-      };
-    }
-
-    // 如果提取不到结构化值，就保留有效文本
-    const cleaned = text
-      .replace(/traffic\s*reset\s*[:：]?/ig, '')
-      .replace(/\breset\b\s*[:：]?/ig, '')
-      .replace(/\brenew\b\s*[:：]?/ig, '')
-      .replace(/流量重置\s*[:：]?/g, '')
-      .replace(/重置\s*[:：]?/g, '')
-      .replace(/\bleft\b/ig, '')
-      .replace(/\bin\b/ig, '')
-      .trim();
-
-    return cleaned
-      ? { value: cleaned }
-      : null;
-  }
-
-  // =========================
-  // 到期时间识别
-  // =========================
-
   function parseExpire(name = '') {
     const text = normalizeSpace(name);
 
-    if (
-      !/\bexp\b|expire|expired|expiration|expiry|到期|有效期|过期/i.test(text)
-    ) {
+    if (!/\bexp\b|expire|expired|expiration|expiry|到期|有效期|过期/i.test(text)) {
       return null;
     }
 
@@ -228,7 +156,7 @@ async function operator(proxies, targetPlatform, context) {
       };
     }
 
-    // dd-mm-yyyy
+    // dd-mm-yyyy / dd/mm/yyyy / dd.mm.yyyy
     match = text.match(
       /(\d{1,2})[-/.](\d{1,2})[-/.](\d{4})/
     );
@@ -242,38 +170,34 @@ async function operator(proxies, targetPlatform, context) {
       };
     }
 
-    // 还有 X 天到期
-    match = text.match(
-      /(\d+(?:\.\d+)?)\s*(?:days?|day|天)/i
-    );
-
-    if (match) {
-      return {
-        value: `${match[1]} 天`
-      };
-    }
-
-    // 无法结构化，保留剩余有效文本
-    const cleaned = text
-      .replace(/\bexp\b\s*[:：]?/ig, '')
-      .replace(/\bexpire(?:d)?(?:\s*date)?\b\s*[:：]?/ig, '')
-      .replace(/\bexpiration\b\s*[:：]?/ig, '')
-      .replace(/\bexpiry\b\s*[:：]?/ig, '')
-      .replace(/到期(?:时间|日期)?\s*[:：]?/g, '')
-      .replace(/有效期\s*[:：]?/g, '')
-      .replace(/过期\s*[:：]?/g, '')
-      .trim();
-
-    return cleaned
-      ? { value: cleaned }
-      : null;
+    return null;
   }
 
   // =========================
-  // 国家地区识别
+  // 判断是否为可丢弃的“剩余天数 / 重置倒计时”信息节点
   // =========================
+  function isRelativeTimeInfo(name = '') {
+    const text = normalizeSpace(name);
 
+    // 避免把“剩余流量”误判成剩余天数
+    if (parseTraffic(text)) {
+      return false;
+    }
+
+    const hasTimeValue =
+      /\d+(?:\.\d+)?\s*(?:days?|day|hours?|hrs?|hour|天|小时)/i.test(text);
+
+    const hasTimeKeyword =
+      /reset|renew|expire|expiration|expiry|left|remaining|重置|到期|有效期|过期|剩余|还有/i.test(text);
+
+    return hasTimeValue && hasTimeKeyword;
+  }
+
+  // =========================
+  // 国家/地区识别
+  // =========================
   function getGeo(name = '') {
+    // 去掉原始国旗，避免“🇨🇳 Taiwan”之类旗帜与文本冲突
     const geoText = removeFlagEmoji(name);
 
     let iso = '';
@@ -297,114 +221,73 @@ async function operator(proxies, targetPlatform, context) {
       flag = '🌐';
     }
 
-    const country =
-      countryNames[iso] ||
-      '其他';
-
     return {
       iso,
       flag,
-      country
+      country: countryNames[iso] || '其他'
     };
   }
 
   // =========================
   // 主处理
   // =========================
+  const result = [];
 
-  return proxies.map(proxy => {
+  for (const proxy of proxies) {
     const originalName = normalizeSpace(proxy.name || '');
 
-    const subName =
-      normalizeSpace(
-        proxy._subDisplayName ||
-        proxy._subName ||
-        '未知订阅'
-      );
+    const subName = normalizeSpace(
+      proxy._subDisplayName ||
+      proxy._subName ||
+      '未知订阅'
+    );
 
-    const type =
-      String(proxy.type || 'unknown').toLowerCase();
+    const type = String(proxy.type || 'unknown').toLowerCase();
 
-    // -------------------------
     // 1. 流量信息
-    // -------------------------
-
     const traffic = parseTraffic(originalName);
 
     if (traffic) {
       if (traffic.kind === 'remaining') {
-        proxy.name =
-          `[${subName}] 📊 剩余流量 [${type}] ${traffic.value}`;
+        proxy.name = `[${subName}] 📊 剩余流量 [${type}] ${traffic.value}`;
+      } else if (traffic.kind === 'used') {
+        proxy.name = `[${subName}] 📊 已用流量 [${type}] ${traffic.value}`;
+      } else if (traffic.kind === 'total') {
+        proxy.name = `[${subName}] 📊 总流量 [${type}] ${traffic.value}`;
+      } else if (traffic.kind === 'usedTotal') {
+        proxy.name = `[${subName}] 📊 流量 [${type}] ${traffic.used} / ${traffic.total}`;
       }
 
-      else if (traffic.kind === 'used') {
-        proxy.name =
-          `[${subName}] 📊 已用流量 [${type}] ${traffic.value}`;
-      }
-
-      else if (traffic.kind === 'total') {
-        proxy.name =
-          `[${subName}] 📊 总流量 [${type}] ${traffic.value}`;
-      }
-
-      else if (traffic.kind === 'usedTotal') {
-        proxy.name =
-          `[${subName}] 📊 流量 [${type}] ${traffic.used} / ${traffic.total}`;
-      }
-
-      return proxy;
+      result.push(proxy);
+      continue;
     }
 
-    // -------------------------
-    // 2. 重置信息
-    // -------------------------
-
-    const reset = parseReset(originalName);
-
-    if (reset) {
-      proxy.name =
-        `[${subName}] 🔄 重置 [${type}] ${reset.value}`;
-
-      return proxy;
-    }
-
-    // -------------------------
-    // 3. 到期信息
-    // -------------------------
-
+    // 2. 到期日期：只保留明确日期
     const expire = parseExpire(originalName);
 
     if (expire) {
-      proxy.name =
-        `[${subName}] ⏳ 到期 [${type}] ${expire.value}`;
-
-      return proxy;
+      proxy.name = `[${subName}] ⏳ 到期 [${type}] ${expire.value}`;
+      result.push(proxy);
+      continue;
     }
 
-    // -------------------------
-    // 4. 普通节点
-    // -------------------------
+    // 3. 删除“剩余 X 天 / 重置倒计时”类信息节点
+    if (isRelativeTimeInfo(originalName)) {
+      continue;
+    }
 
-    const {
-      iso,
-      flag,
-      country
-    } = getGeo(originalName);
+    // 4. 普通代理节点
+    const { iso, flag, country } = getGeo(originalName);
 
-    const counterKey =
-      `${subName}::${iso}::${type}`;
-
-    const index =
-      (counters.get(counterKey) || 0) + 1;
-
+    const counterKey = `${subName}::${iso}::${type}`;
+    const index = (counters.get(counterKey) || 0) + 1;
     counters.set(counterKey, index);
 
-    const serial =
-      String(index).padStart(2, '0');
+    const serial = String(index).padStart(2, '0');
 
-    proxy.name =
-      `[${subName}] ${flag} ${country} ${iso} [${type}] ${serial}`;
+    proxy.name = `[${subName}] ${flag} ${country} ${iso} [${type}] ${serial}`;
+    result.push(proxy);
+  }
 
-    return proxy;
-  });
+  return result;
 }
