@@ -9,8 +9,7 @@
 //    该组仅包含：落地节点 + 🚀 手动选择。
 // 6. 落地节点不会进入自动选择、地区、全部节点等其他策略组。
 // 7. 如果「落地节点」不存在 / 无节点 / 读取失败，则不改策略组结构，仅注入机场合集。
-//
-// 适用于：文件 -> mihomo 配置 -> 操作 -> 脚本操作
+// 8. 临时输出 substore-debug，用来定位 Mihomo 文件显示名称在运行时上下文中的真实字段。
 
 const yaml = ProxyUtils.yaml.safeLoad($content ?? $files[0]) || {};
 
@@ -34,9 +33,6 @@ function escapeRegex(text = '') {
   return String(text).replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 }
 
-// 尽量从 Sub-Store 当前脚本上下文中取得“文件显示名称”。
-// Sub-Store 官方 demo 对 source 的推荐取法也是优先 displayName，其次 name。
-// 不同版本/运行环境上下文可能略有差异，因此这里做了多层兼容。
 function getCurrentFileDisplayName() {
   const contexts = [];
 
@@ -56,7 +52,6 @@ function getCurrentFileDisplayName() {
 
       const source = ctx.source;
       if (source && typeof source === 'object') {
-        // 优先当前非内部 source。
         for (const [key, value] of Object.entries(source)) {
           if (!key.startsWith('_') && value && typeof value === 'object') {
             const name = value.displayName || value.name;
@@ -64,7 +59,6 @@ function getCurrentFileDisplayName() {
           }
         }
 
-        // 部分上下文会把当前资源放在内部字段。
         for (const key of ['_file', '_mihomoConfig', '_source']) {
           const value = source[key];
           if (value && typeof value === 'object') {
@@ -76,7 +70,6 @@ function getCurrentFileDisplayName() {
     } catch (_) {}
   }
 
-  // 某些文件操作环境可能会通过 $options 暴露当前文件信息。
   try {
     if (typeof $options !== 'undefined' && $options) {
       const candidates = [
@@ -129,10 +122,6 @@ try {
 } catch (e) {
   landings = [];
   landingEnabled = false;
-
-  try {
-    console.log(`[mihomo] 未找到或无法读取「${LANDING_SUBSCRIPTION}」订阅，已跳过落地节点处理`);
-  } catch (_) {}
 }
 
 // -------------------------
@@ -157,19 +146,13 @@ function findGroup(name) {
   return yaml['proxy-groups'].find(group => group && group.name === name);
 }
 
-// -------------------------
-// 落地节点链路处理
-// -------------------------
 if (landingEnabled) {
   const landingNames = uniqueNames(landings.map(proxy => proxy.name));
   const landingNameSet = new Set(landingNames);
 
-  // 原「🚀 节点选择」就是机场路线的手动选择器。
-  // 将它改名为「🚀 手动选择」。
   let manualGroup = findGroup(OLD_MANUAL_GROUP) || findGroup(MANUAL_GROUP);
 
   if (!manualGroup) {
-    // 模板里意外没有原手动组时，兜底创建一个只包含机场节点的 select。
     manualGroup = {
       name: MANUAL_GROUP,
       type: 'select',
@@ -180,7 +163,6 @@ if (landingEnabled) {
     manualGroup.name = MANUAL_GROUP;
   }
 
-  // 落地节点必须通过手动选择的机场路线拨号。
   for (const proxy of landings) {
     proxy['dialer-proxy'] = MANUAL_GROUP;
     merged.set(proxy.name, proxy);
@@ -188,11 +170,6 @@ if (landingEnabled) {
 
   yaml.proxies = Array.from(merged.values());
 
-  // --------------------------------------------------
-  // 确保落地节点不会出现在任何其他策略组中
-  // --------------------------------------------------
-  // 对显式 proxies：直接删除落地节点名。
-  // 对 include-all / use 等动态组：通过 exclude-filter 精确排除落地节点。
   const landingExcludePattern = landingNames.length
     ? `(?:${landingNames.map(name => `^${escapeRegex(name)}$`).join('|')})`
     : '';
@@ -213,22 +190,16 @@ if (landingEnabled) {
     }
   }
 
-  // 手动选择本身也不允许直接包含任何落地节点，避免代理链递归。
   if (Array.isArray(manualGroup.proxies)) {
     manualGroup.proxies = manualGroup.proxies.filter(name => !landingNameSet.has(name));
   }
 
-  // --------------------------------------------------
-  // 创建顶层选择组：文件显示名称
-  // --------------------------------------------------
   let rootGroupName = getCurrentFileDisplayName() || FALLBACK_ROOT_GROUP;
 
-  // 避免与内部手动组重名。
   if (rootGroupName === MANUAL_GROUP) {
     rootGroupName = FALLBACK_ROOT_GROUP;
   }
 
-  // 如果已经有同名组则更新，否则创建。
   let rootGroup = findGroup(rootGroupName);
 
   if (!rootGroup || rootGroup === manualGroup) {
@@ -246,46 +217,97 @@ if (landingEnabled) {
     MANUAL_GROUP
   ]);
 
-  // 顶层组必须是纯显式选择组，避免动态把其他节点混进来。
   delete rootGroup['include-all'];
   delete rootGroup.use;
   delete rootGroup.filter;
   delete rootGroup['exclude-filter'];
   delete rootGroup['exclude-type'];
 
-  // --------------------------------------------------
-  // 更新原配置中对「🚀 节点选择」的引用
-  // --------------------------------------------------
-  // 原先规则/其他策略组都把 🚀 节点选择 当作总出口。
-  // 现在新的总出口是“文件显示名称”组；而旧组本身改名为 🚀 手动选择。
   for (const group of yaml['proxy-groups']) {
     if (!group || group === rootGroup || group === manualGroup) continue;
 
     if (Array.isArray(group.proxies)) {
-      group.proxies = group.proxies.map(name =>
-        name === OLD_MANUAL_GROUP ? rootGroupName : name
+      group.proxies = uniqueNames(
+        group.proxies.map(name =>
+          name === OLD_MANUAL_GROUP ? rootGroupName : name
+        )
       );
-      group.proxies = uniqueNames(group.proxies);
     }
   }
 
   if (Array.isArray(yaml.rules)) {
     yaml.rules = yaml.rules.map(rule => {
       if (typeof rule !== 'string') return rule;
-
-      // 只替换策略字段中的组名；模板里组名本身足够独特，直接替换即可。
       return rule.split(OLD_MANUAL_GROUP).join(rootGroupName);
     });
   }
-
-  try {
-    console.log(
-      `[mihomo] 已启用落地节点：顶层组「${rootGroupName}」 -> [${landingNames.join(', ')}, ${MANUAL_GROUP}]；落地 dialer-proxy -> ${MANUAL_GROUP}`
-    );
-  } catch (_) {}
 } else {
-  // 没有落地节点时保持模板原有结构。
   yaml.proxies = Array.from(merged.values());
 }
+
+// =====================================================
+// 临时调试：把文件操作运行时上下文直接输出到最终 YAML
+// 找到显示名称字段后会删除这一段。
+// =====================================================
+function makeDebugSafe(value, depth = 0, seen = new WeakSet()) {
+  if (depth > 6) return '[max-depth]';
+
+  if (value === null || value === undefined) return value ?? null;
+
+  const type = typeof value;
+  if (type === 'string' || type === 'number' || type === 'boolean') return value;
+  if (type === 'function') return '[function]';
+  if (type !== 'object') return String(value);
+
+  if (seen.has(value)) return '[circular]';
+  seen.add(value);
+
+  if (Array.isArray(value)) {
+    return value.slice(0, 30).map(item => makeDebugSafe(item, depth + 1, seen));
+  }
+
+  const result = {};
+  for (const [key, item] of Object.entries(value).slice(0, 100)) {
+    try {
+      result[key] = makeDebugSafe(item, depth + 1, seen);
+    } catch (_) {
+      result[key] = '[unreadable]';
+    }
+  }
+  return result;
+}
+
+const debug = {
+  detectedDisplayName: getCurrentFileDisplayName() || null,
+  context: null,
+  $context: null,
+  $options: null
+};
+
+try {
+  debug.context = typeof context !== 'undefined'
+    ? makeDebugSafe(context)
+    : '[undefined]';
+} catch (e) {
+  debug.context = `[error: ${String(e)}]`;
+}
+
+try {
+  debug.$context = typeof $context !== 'undefined'
+    ? makeDebugSafe($context)
+    : '[undefined]';
+} catch (e) {
+  debug.$context = `[error: ${String(e)}]`;
+}
+
+try {
+  debug.$options = typeof $options !== 'undefined'
+    ? makeDebugSafe($options)
+    : '[undefined]';
+} catch (e) {
+  debug.$options = `[error: ${String(e)}]`;
+}
+
+yaml['substore-debug'] = debug;
 
 $content = ProxyUtils.yaml.safeDump(yaml);
