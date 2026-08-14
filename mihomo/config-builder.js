@@ -1,8 +1,6 @@
 // Sub-Store 文件操作脚本
 const yaml = ProxyUtils.yaml.safeLoad($content ?? $files[0]) || {};
 
-const DEFAULT_SUB = '机场合集';
-const OLD_MANUAL_GROUP = '🚀 节点选择';
 const MANUAL_GROUP = '🚀 手动选择';
 const FALLBACK_ROOT_GROUP = '🚀 节点选择';
 
@@ -14,13 +12,14 @@ function cleanName(value){if(value===null||value===undefined)return '';return St
 function lower(value){return cleanName(value).toLowerCase()}
 function getRequestQuery(){try{if(typeof $options!=='undefined'&&$options&&$options._req&&$options._req.query&&typeof $options._req.query==='object')return $options._req.query}catch(_){}return {}}
 function getScriptArguments(){try{if(typeof $arguments!=='undefined'&&$arguments&&typeof $arguments==='object')return $arguments}catch(_){}return {}}
-const requestQuery=getRequestQuery();const scriptArguments=getScriptArguments();
+const requestQuery=getRequestQuery();
+const scriptArguments=getScriptArguments();
 function getCaseInsensitive(obj,key){if(!obj||typeof obj!=='object')return undefined;const wanted=String(key).toLowerCase();for(const actualKey of Object.keys(obj)){if(String(actualKey).toLowerCase()===wanted){const value=obj[actualKey];if(value!==undefined&&value!==null&&value!=='')return value}}return undefined}
 function getOption(...keys){for(const key of keys){const value=getCaseInsensitive(requestQuery,key);if(value!==undefined)return value}for(const key of keys){const value=getCaseInsensitive(scriptArguments,key);if(value!==undefined)return value}return undefined}
 function applyDnsPreset(preset){const value=lower(preset);if(!value||value==='default')return;yaml.dns=yaml.dns&&typeof yaml.dns==='object'?yaml.dns:{};if(['off','false','0'].includes(value)){yaml.dns.enable=false;return}yaml.dns.enable=true;if(value==='cn'){yaml.dns['default-nameserver']=['223.5.5.5','223.6.6.6','119.29.29.29','119.28.28.28'];yaml.dns.nameserver=['https://223.5.5.5/dns-query','https://doh.pub/dns-query','https://dns.alidns.com/dns-query'];return}if(value==='global'){yaml.dns['default-nameserver']=['1.1.1.1','8.8.8.8','9.9.9.9'];yaml.dns.nameserver=['https://1.1.1.1/dns-query','https://8.8.8.8/dns-query','https://dns.quad9.net/dns-query']}}
 function applyRuntimeOptions(){const profile=lower(getOption('profile'))||'default';if(profile==='home'){yaml['allow-lan']=true;if(getOption('dns')===undefined)applyDnsPreset('cn')}else if(profile==='router'){yaml['allow-lan']=true;yaml['bind-address']='*';if(getOption('dns')===undefined)applyDnsPreset('cn')}else if(profile==='phone'){yaml['allow-lan']=false;if(getOption('dns')===undefined)applyDnsPreset('global')}const mode=lower(getOption('mihomo_mode','mihomoMode'));if(['rule','global','direct'].includes(mode))yaml.mode=mode;const dns=getOption('dns');if(dns!==undefined)applyDnsPreset(dns)}
 function getRootGroupName(){return cleanName(getOption('rootGroupName','root_group_name','groupName'))||FALLBACK_ROOT_GROUP}
-function getSubName(){return cleanName(getOption('sub'))||DEFAULT_SUB}
+function getSubName(){const name=cleanName(getOption('sub'));if(!name)throw new Error('缺少必填参数 sub：请指定组合订阅或单个订阅名称');return name}
 function getRuleProviderBase(){const value=cleanName(getOption('rule_provider_base','ruleProviderBase'));return value?value.replace(/\/+$/,''):''}
 function parseLandingSubscriptionNames(){const raw=getOption('landing');if(raw===undefined)return[];const value=cleanName(raw);if(!value||['none','off','false','0'].includes(value.toLowerCase()))return[];return uniqueNames(value.split(',').map(name=>cleanName(name)).filter(Boolean))}
 async function readArtifact(type,name){try{return validProxies(await produceArtifact({type,name,platform:'ClashMeta',produceType:'internal'}))}catch(_){return[]}}
@@ -31,10 +30,64 @@ function injectCustomRules(ruleProviderBase,proxyGroup){if(!ruleProviderBase)ret
 
 applyRuntimeOptions();
 const airports=await resolveMainProxies();
-const landings=await resolveLandingProxies();const landingEnabled=landings.length>0;
-const existingProxies=Array.isArray(yaml.proxies)?yaml.proxies:[];const merged=new Map();for(const proxy of existingProxies)if(proxy&&proxy.name)merged.set(proxy.name,proxy);for(const proxy of airports)merged.set(proxy.name,proxy);
-yaml['proxy-groups']=Array.isArray(yaml['proxy-groups'])?yaml['proxy-groups']:[];function findGroup(name){return yaml['proxy-groups'].find(group=>group&&group.name===name)}let finalRootGroupName=getRootGroupName();
-if(landingEnabled){const landingNames=uniqueNames(landings.map(proxy=>proxy.name));const landingNameSet=new Set(landingNames);let manualGroup=findGroup(OLD_MANUAL_GROUP)||findGroup(MANUAL_GROUP);if(!manualGroup){manualGroup={name:MANUAL_GROUP,type:'select',proxies:uniqueNames(airports.map(proxy=>proxy.name))};yaml['proxy-groups'].unshift(manualGroup)}else{manualGroup.name=MANUAL_GROUP}for(const proxy of landings){proxy['dialer-proxy']=MANUAL_GROUP;merged.set(proxy.name,proxy)}yaml.proxies=Array.from(merged.values());const landingExcludePattern=landingNames.length?`(?:${landingNames.map(name=>`^${escapeRegex(name)}$`).join('|')})`:'';for(const group of yaml['proxy-groups']){if(!group||group===manualGroup)continue;if(Array.isArray(group.proxies))group.proxies=group.proxies.filter(name=>!landingNameSet.has(name));const isDynamic=group['include-all']||group.use||group.filter;if(isDynamic&&landingExcludePattern){const oldExclude=group['exclude-filter'];group['exclude-filter']=oldExclude?`(?:${oldExclude})|${landingExcludePattern}`:landingExcludePattern}}if(Array.isArray(manualGroup.proxies))manualGroup.proxies=manualGroup.proxies.filter(name=>!landingNameSet.has(name));if(finalRootGroupName===MANUAL_GROUP)finalRootGroupName=FALLBACK_ROOT_GROUP;let rootGroup=findGroup(finalRootGroupName);if(!rootGroup||rootGroup===manualGroup){rootGroup={name:finalRootGroupName,type:'select',proxies:[]};yaml['proxy-groups'].unshift(rootGroup)}rootGroup.type='select';rootGroup.proxies=uniqueNames([...landingNames,MANUAL_GROUP]);delete rootGroup['include-all'];delete rootGroup.use;delete rootGroup.filter;delete rootGroup['exclude-filter'];delete rootGroup['exclude-type'];rewriteGroupReferences([OLD_MANUAL_GROUP],finalRootGroupName,[rootGroup,manualGroup])}else{yaml.proxies=Array.from(merged.values());let manualGroup=findGroup(OLD_MANUAL_GROUP)||findGroup(MANUAL_GROUP);if(!manualGroup){manualGroup={name:finalRootGroupName,type:'select',proxies:uniqueNames(airports.map(proxy=>proxy.name))};yaml['proxy-groups'].unshift(manualGroup)}else{const oldName=manualGroup.name;manualGroup.name=finalRootGroupName;rewriteGroupReferences([OLD_MANUAL_GROUP,MANUAL_GROUP,oldName],finalRootGroupName,[manualGroup])}}
-if(lower(yaml.mode)==='global'&&finalRootGroupName!=='GLOBAL'){let globalGroup=findGroup('GLOBAL');if(!globalGroup){globalGroup={name:'GLOBAL',type:'select',proxies:[]};yaml['proxy-groups'].unshift(globalGroup)}globalGroup.type='select';globalGroup.proxies=[finalRootGroupName];delete globalGroup['include-all'];delete globalGroup.use;delete globalGroup.filter;delete globalGroup['exclude-filter'];delete globalGroup['exclude-type']}
+const landings=await resolveLandingProxies();
+const landingEnabled=landings.length>0;
+const existingProxies=Array.isArray(yaml.proxies)?yaml.proxies:[];
+const merged=new Map();
+for(const proxy of existingProxies)if(proxy&&proxy.name)merged.set(proxy.name,proxy);
+for(const proxy of airports)merged.set(proxy.name,proxy);
+yaml['proxy-groups']=Array.isArray(yaml['proxy-groups'])?yaml['proxy-groups']:[];
+function findGroup(name){return yaml['proxy-groups'].find(group=>group&&group.name===name)}
+let finalRootGroupName=getRootGroupName();
+
+if(landingEnabled){
+  const landingNames=uniqueNames(landings.map(proxy=>proxy.name));
+  const landingNameSet=new Set(landingNames);
+  let manualGroup=findGroup(MANUAL_GROUP);
+  let originalRootGroup=findGroup(finalRootGroupName);
+
+  if(!manualGroup){
+    if(originalRootGroup&&originalRootGroup.name!==MANUAL_GROUP){
+      manualGroup=originalRootGroup;
+      manualGroup.name=MANUAL_GROUP;
+    }else{
+      manualGroup={name:MANUAL_GROUP,type:'select',proxies:uniqueNames(airports.map(proxy=>proxy.name))};
+      yaml['proxy-groups'].unshift(manualGroup);
+    }
+  }
+
+  for(const proxy of landings){proxy['dialer-proxy']=MANUAL_GROUP;merged.set(proxy.name,proxy)}
+  yaml.proxies=Array.from(merged.values());
+
+  const landingExcludePattern=landingNames.length?`(?:${landingNames.map(name=>`^${escapeRegex(name)}$`).join('|')})`:'';
+  for(const group of yaml['proxy-groups']){
+    if(!group||group===manualGroup)continue;
+    if(Array.isArray(group.proxies))group.proxies=group.proxies.filter(name=>!landingNameSet.has(name));
+    const isDynamic=group['include-all']||group.use||group.filter;
+    if(isDynamic&&landingExcludePattern){const oldExclude=group['exclude-filter'];group['exclude-filter']=oldExclude?`(?:${oldExclude})|${landingExcludePattern}`:landingExcludePattern}
+  }
+  if(Array.isArray(manualGroup.proxies))manualGroup.proxies=manualGroup.proxies.filter(name=>!landingNameSet.has(name));
+
+  if(finalRootGroupName===MANUAL_GROUP)finalRootGroupName=FALLBACK_ROOT_GROUP;
+  let rootGroup=findGroup(finalRootGroupName);
+  if(!rootGroup||rootGroup===manualGroup){rootGroup={name:finalRootGroupName,type:'select',proxies:[]};yaml['proxy-groups'].unshift(rootGroup)}
+  rootGroup.type='select';
+  rootGroup.proxies=uniqueNames([...landingNames,MANUAL_GROUP]);
+  delete rootGroup['include-all'];delete rootGroup.use;delete rootGroup.filter;delete rootGroup['exclude-filter'];delete rootGroup['exclude-type'];
+  rewriteGroupReferences([finalRootGroupName],finalRootGroupName,[rootGroup,manualGroup]);
+}else{
+  yaml.proxies=Array.from(merged.values());
+  let rootGroup=findGroup(finalRootGroupName);
+  if(!rootGroup){rootGroup={name:finalRootGroupName,type:'select',proxies:uniqueNames(airports.map(proxy=>proxy.name))};yaml['proxy-groups'].unshift(rootGroup)}
+}
+
+if(lower(yaml.mode)==='global'&&finalRootGroupName!=='GLOBAL'){
+  let globalGroup=findGroup('GLOBAL');
+  if(!globalGroup){globalGroup={name:'GLOBAL',type:'select',proxies:[]};yaml['proxy-groups'].unshift(globalGroup)}
+  globalGroup.type='select';
+  globalGroup.proxies=[finalRootGroupName];
+  delete globalGroup['include-all'];delete globalGroup.use;delete globalGroup.filter;delete globalGroup['exclude-filter'];delete globalGroup['exclude-type'];
+}
+
 injectCustomRules(getRuleProviderBase(),finalRootGroupName);
 $content=ProxyUtils.yaml.safeDump(yaml);
