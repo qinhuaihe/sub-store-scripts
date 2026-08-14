@@ -1,7 +1,7 @@
 // Sub-Store 文件操作脚本
 const yaml = ProxyUtils.yaml.safeLoad($content ?? $files[0]) || {};
 const AIRPORT_COLLECTION = '机场合集';
-const DEFAULT_LANDING_GROUP_NAME = '落地节点';
+const LANDING_SUBSCRIPTION = '落地节点';
 const OLD_MANUAL_GROUP = '🚀 节点选择';
 const MANUAL_GROUP = '🚀 手动选择';
 const FALLBACK_ROOT_GROUP = '🚀 节点选择';
@@ -20,16 +20,15 @@ function getOption(...keys){for(const key of keys){const value=getCaseInsensitiv
 function applyDnsPreset(preset){const value=lower(preset);if(!value||value==='default')return;yaml.dns=yaml.dns&&typeof yaml.dns==='object'?yaml.dns:{};if(['off','false','0'].includes(value)){yaml.dns.enable=false;return}yaml.dns.enable=true;if(value==='cn'){yaml.dns['default-nameserver']=['223.5.5.5','223.6.6.6','119.29.29.29','119.28.28.28'];yaml.dns.nameserver=['https://223.5.5.5/dns-query','https://doh.pub/dns-query','https://dns.alidns.com/dns-query'];return}if(value==='global'){yaml.dns['default-nameserver']=['1.1.1.1','8.8.8.8','9.9.9.9'];yaml.dns.nameserver=['https://1.1.1.1/dns-query','https://8.8.8.8/dns-query','https://dns.quad9.net/dns-query']}}
 function applyRuntimeOptions(){const profile=lower(getOption('profile'))||'default';if(profile==='home'){yaml['allow-lan']=true;if(getOption('dns')===undefined)applyDnsPreset('cn')}else if(profile==='router'){yaml['allow-lan']=true;yaml['bind-address']='*';if(getOption('dns')===undefined)applyDnsPreset('cn')}else if(profile==='phone'){yaml['allow-lan']=false;if(getOption('dns')===undefined)applyDnsPreset('global')}const mode=lower(getOption('mihomo_mode','mihomoMode'));if(['rule','global','direct'].includes(mode))yaml.mode=mode;const dns=getOption('dns');if(dns!==undefined)applyDnsPreset(dns)}
 function getRootGroupName(){return cleanName(getOption('rootGroupName','root_group_name','groupName'))||FALLBACK_ROOT_GROUP}
-function getLandingGroupName(){return cleanName(getOption('landing_group_name','landingGroupName'))||DEFAULT_LANDING_GROUP_NAME}
-function parseLandingNames(){const raw=getOption('landing');if(raw===undefined)return null;const value=cleanName(raw);if(['none','off','false','0'].includes(value.toLowerCase()))return [];return uniqueNames(value.split(',').map(name=>cleanName(name)).filter(Boolean))}
+function parseLandingNames(){const raw=getOption('landing');if(raw===undefined)return [];const value=cleanName(raw);if(!value||['none','off','false','0'].includes(value.toLowerCase()))return [];return uniqueNames(value.split(',').map(name=>cleanName(name)).filter(Boolean))}
 async function readSubscription(name){try{return validProxies(await produceArtifact({type:'subscription',name,platform:'ClashMeta',produceType:'internal'}))}catch(_){return []}}
-async function resolveLandingProxies(allLandings,landingGroupName){const wantedNames=parseLandingNames();if(wantedNames===null)return allLandings;if(wantedNames.length===0)return [];const result=[];const landingMap=new Map(allLandings.map(proxy=>[proxy.name,proxy]));for(const name of wantedNames){const matchedProxy=landingMap.get(name);if(matchedProxy){result.push(matchedProxy);continue}const subscriptionProxies=await readSubscription(name);if(subscriptionProxies.length===0){throw new Error(`Landing "${name}" 不存在：在「${landingGroupName}」中未找到同名节点，也未找到可用的同名订阅`)}result.push(...subscriptionProxies)}return uniqueProxies(result)}
+async function resolveLandingProxies(allLandings){const wantedNames=parseLandingNames();if(wantedNames.length===0)return [];const result=[];const landingMap=new Map(allLandings.map(proxy=>[proxy.name,proxy]));for(const name of wantedNames){const matchedProxy=landingMap.get(name);if(matchedProxy){result.push(matchedProxy);continue}const subscriptionProxies=await readSubscription(name);if(subscriptionProxies.length===0){throw new Error(`Landing "${name}" 不存在：在「${LANDING_SUBSCRIPTION}」中未找到同名节点，也未找到可用的同名订阅`)}result.push(...subscriptionProxies)}return uniqueProxies(result)}
 function rewriteGroupReferences(fromNames,toName,excludeGroups=[]){const fromSet=new Set(fromNames);for(const group of yaml['proxy-groups']){if(!group||excludeGroups.includes(group)||!Array.isArray(group.proxies))continue;group.proxies=uniqueNames(group.proxies.map(name=>fromSet.has(name)?toName:name))}if(Array.isArray(yaml.rules)){yaml.rules=yaml.rules.map(rule=>{if(typeof rule!=='string')return rule;let next=rule;for(const name of fromNames)next=next.split(name).join(toName);return next})}}
 applyRuntimeOptions();
 const airports=validProxies(await produceArtifact({type:'collection',name:AIRPORT_COLLECTION,platform:'ClashMeta',produceType:'internal'}));
-const landingGroupName=getLandingGroupName();
-const allLandings=await readSubscription(landingGroupName);
-const landings=await resolveLandingProxies(allLandings,landingGroupName);
+const requestedLandingNames=parseLandingNames();
+const allLandings=requestedLandingNames.length>0?await readSubscription(LANDING_SUBSCRIPTION):[];
+const landings=await resolveLandingProxies(allLandings);
 const landingEnabled=landings.length>0;
 const existingProxies=Array.isArray(yaml.proxies)?yaml.proxies:[];
 const merged=new Map();
