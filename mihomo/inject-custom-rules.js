@@ -9,12 +9,15 @@
 //    - custom-direct -> DIRECT
 // 4. 自定义规则保持最高优先级，并避免重复注入。
 //
+// 必填参数：
+// - rule_provider_base：rule-provider 文件所在目录的基础 URL。
+//   示例：https://raw.githubusercontent.com/<owner>/<repo>/main/rules
+//
 // 适用于：文件 -> mihomo 配置 -> 操作 -> 脚本操作
 
 const yaml = ProxyUtils.yaml.safeLoad($content ?? $files[0]) || {};
 
 const DEFAULT_PROXY_GROUP = '♻️ 自动选择';
-const RULE_PROVIDER_BASE = 'https://raw.githubusercontent.com/qinhuaihe/sub-store-scripts/main/rules';
 
 function cleanText(value) {
   if (value === null || value === undefined) return '';
@@ -52,7 +55,21 @@ function resolveProxyGroup() {
   ) || DEFAULT_PROXY_GROUP;
 }
 
+function resolveRuleProviderBase() {
+  const args = getArgumentsObject();
+  const value = cleanText(args.rule_provider_base).replace(/\/+$/, '');
+
+  if (!value) {
+    throw new Error(
+      '缺少必填参数 rule_provider_base，例如：https://raw.githubusercontent.com/<owner>/<repo>/main/rules'
+    );
+  }
+
+  return value;
+}
+
 const proxyGroup = resolveProxyGroup();
+const RULE_PROVIDER_BASE = resolveRuleProviderBase();
 
 const providerDefs = {
   'custom-reject': {
