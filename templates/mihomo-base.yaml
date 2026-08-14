@@ -20,9 +20,6 @@ profile:
   store-selected: true
   store-fake-ip: true
 
-# 代理节点由 Sub-Store 注入
-proxies: []
-
 # =========================
 # DNS
 # =========================
@@ -135,6 +132,9 @@ dns:
     - 'www.bilibili.com'
     - 'api.bilibili.com'
     - 'a.w.bilicdn1.com'
+
+# 代理节点由 Sub-Store 注入
+proxies: []
 
 # =========================
 # 策略组
