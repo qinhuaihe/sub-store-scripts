@@ -163,6 +163,11 @@ function getRootGroupName() {
     || FALLBACK_ROOT_GROUP;
 }
 
+function getRuleProviderBase() {
+  const value = cleanName(getOption('rule_provider_base', 'ruleProviderBase'));
+  return value ? value.replace(/\/+$/, '') : '';
+}
+
 function parseLandingSubscriptionNames() {
   const raw = getOption('landing');
   if (raw === undefined) return [];
@@ -234,6 +239,61 @@ function rewriteGroupReferences(fromNames, toName, excludeGroups = []) {
       return next;
     });
   }
+}
+
+function injectCustomRules(ruleProviderBase, proxyGroup) {
+  if (!ruleProviderBase) return;
+
+  const providerDefs = {
+    'custom-reject': {
+      type: 'http',
+      behavior: 'classical',
+      format: 'yaml',
+      url: `${ruleProviderBase}/custom-reject.yaml`,
+      path: './ruleset/custom-reject.yaml',
+      interval: 86400
+    },
+    'custom-proxy': {
+      type: 'http',
+      behavior: 'classical',
+      format: 'yaml',
+      url: `${ruleProviderBase}/custom-proxy.yaml`,
+      path: './ruleset/custom-proxy.yaml',
+      interval: 86400
+    },
+    'custom-direct': {
+      type: 'http',
+      behavior: 'classical',
+      format: 'yaml',
+      url: `${ruleProviderBase}/custom-direct.yaml`,
+      path: './ruleset/custom-direct.yaml',
+      interval: 86400
+    }
+  };
+
+  yaml['rule-providers'] = {
+    ...(yaml['rule-providers'] || {}),
+    ...providerDefs
+  };
+
+  yaml.rules = Array.isArray(yaml.rules) ? yaml.rules : [];
+
+  const prefixes = [
+    'RULE-SET,custom-reject,',
+    'RULE-SET,custom-proxy,',
+    'RULE-SET,custom-direct,'
+  ];
+
+  yaml.rules = yaml.rules.filter(rule => {
+    if (typeof rule !== 'string') return true;
+    return !prefixes.some(prefix => rule.startsWith(prefix));
+  });
+
+  yaml.rules.unshift(
+    'RULE-SET,custom-reject,REJECT',
+    `RULE-SET,custom-proxy,${proxyGroup}`,
+    'RULE-SET,custom-direct,DIRECT'
+  );
 }
 
 applyRuntimeOptions();
@@ -406,5 +466,9 @@ if (lower(yaml.mode) === 'global' && finalRootGroupName !== 'GLOBAL') {
   delete globalGroup['exclude-filter'];
   delete globalGroup['exclude-type'];
 }
+
+// 可选注入自定义规则：仅在传入 rule_provider_base 时启用。
+// custom-proxy 默认使用最终 root group，无需额外指定 proxyGroup。
+injectCustomRules(getRuleProviderBase(), finalRootGroupName);
 
 $content = ProxyUtils.yaml.safeDump(yaml);
