@@ -625,4 +625,8 @@ Global + Landing：
 
 ## License
 
-当前仓库未声明开源许可证。若计划公开供他人复用，可后续补充合适的 LICENSE。
+本项目采用 [MIT License](./LICENSE) 开源。
+
+你可以自由使用、复制、修改、合并、发布、分发、再授权和销售本项目的软件副本，包括商业用途；使用时需保留原始版权声明和 MIT 许可声明。
+
+Copyright (c) 2026 qinhuaihe
