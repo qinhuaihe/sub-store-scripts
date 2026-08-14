@@ -238,7 +238,6 @@ proxy-groups:
     type: select
     proxies:
       - DIRECT
-      - 🚀 节点选择
 
   - name: 🐟 漏网之鱼
     type: select
